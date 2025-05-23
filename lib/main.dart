@@ -1,8 +1,11 @@
-import 'dart:io';
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:audioplayers/audioplayers.dart';  // Para áudio
 
 final clients = <WebSocket>[];
 
@@ -15,9 +18,14 @@ class TVBingoApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const MaterialApp(
+    return MaterialApp(
       debugShowCheckedModeBanner: false,
-      home: BingoControlScreen(),
+      themeMode: ThemeMode.dark,
+      darkTheme: ThemeData.dark(useMaterial3: true),
+      theme: ThemeData(
+        fontFamily: 'Poppins',
+      ),
+      home: const BingoControlScreen(),
     );
   }
 }
@@ -32,21 +40,38 @@ class BingoControlScreen extends StatefulWidget {
 class _BingoControlScreenState extends State<BingoControlScreen> {
   final drawnNumbers = <int>[];
   String ipAddress = '';
+  String? _serverError;
+  Timer? _timer;
+  bool _isRunning = false;
+  final _random = Random();
+
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  final AudioPlayer _musicPlayer = AudioPlayer();
 
   @override
   void initState() {
     super.initState();
     _getLocalIp();
     _startWebSocketServer();
+    _startBackgroundMusic();
   }
 
-  /// Obtém o IP local da TV Android (não loopback e válido)
-  Future<void> _getLocalIp() async {
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _audioPlayer.dispose();
+    _musicPlayer.dispose();
+    super.dispose();
+  }
+
+  void _getLocalIp() async {
     try {
-      for (var interface in await NetworkInterface.list(
+      final interfaces = await NetworkInterface.list(
         includeLoopback: false,
         type: InternetAddressType.IPv4,
-      )) {
+      );
+
+      for (var interface in interfaces) {
         for (var addr in interface.addresses) {
           if (!addr.isLoopback) {
             setState(() {
@@ -56,10 +81,14 @@ class _BingoControlScreenState extends State<BingoControlScreen> {
           }
         }
       }
-      setState(() => ipAddress = 'IP não encontrado');
+
+      setState(() {
+        ipAddress = 'IP não encontrado';
+      });
     } catch (e) {
-      setState(() => ipAddress = 'Erro ao obter IP');
-      print('Erro ao obter IP: $e');
+      setState(() {
+        ipAddress = 'Erro ao obter IP: $e';
+      });
     }
   }
 
@@ -73,15 +102,17 @@ class _BingoControlScreenState extends State<BingoControlScreen> {
           WebSocket socket = await WebSocketTransformer.upgrade(req);
           clients.add(socket);
           print('Novo cliente conectado: ${req.connectionInfo?.remoteAddress}');
+          setState(() {}); // Atualiza contagem dispositivos
 
           socket.listen(
             (data) {
               print('Recebido do cliente: $data');
-              _broadcast(data);
+              _handleClientMessage(data, socket);
             },
             onDone: () {
               clients.remove(socket);
               print('Cliente desconectado');
+              setState(() {}); // Atualiza contagem dispositivos
             },
           );
         } else {
@@ -91,7 +122,51 @@ class _BingoControlScreenState extends State<BingoControlScreen> {
       }
     } catch (e) {
       print('Erro ao iniciar servidor WebSocket: $e');
+      setState(() {
+        _serverError = 'Erro ao iniciar servidor WebSocket: $e';
+      });
     }
+  }
+
+  void _handleClientMessage(dynamic data, WebSocket socket) {
+    try {
+      final decoded = jsonDecode(data);
+      final type = decoded['type'];
+
+      if (type == 'BINGO') {
+        List<dynamic> clientNumbers = decoded['numbers'] ?? [];
+        final playerId = decoded['playerId'] ?? 'Jogador desconhecido';
+
+        final isWinner = _checkBingo(clientNumbers.cast<int>());
+        if (isWinner) {
+          _broadcast(jsonEncode({
+            'type': 'BINGO_RESULT',
+            'result': 'WIN',
+            'playerId': playerId,
+            'message': 'Bingo válido! Jogo encerrado.'
+          }));
+
+          _stopDrawing();
+        } else {
+          socket.add(jsonEncode({
+            'type': 'BINGO_RESULT',
+            'result': 'FAIL',
+            'message': 'Bingo inválido. Continue jogando!'
+          }));
+        }
+      }
+    } catch (e) {
+      print('Erro ao processar mensagem do cliente: $e');
+    }
+  }
+
+  bool _checkBingo(List<int> clientNumbers) {
+    for (var n in clientNumbers) {
+      if (!drawnNumbers.contains(n)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   void _broadcast(String data) {
@@ -102,13 +177,36 @@ class _BingoControlScreenState extends State<BingoControlScreen> {
     }
   }
 
+  Future<void> _playNumberSound() async {
+    try {
+      // Coloque o caminho do áudio de 3 segundos na pasta assets/audio
+      await _audioPlayer.play(AssetSource('audio/ball_sound.mp3'));
+    } catch (e) {
+      print('Erro ao tocar som: $e');
+    }
+  }
+
+  Future<void> _startBackgroundMusic() async {
+    try {
+      await _musicPlayer.setReleaseMode(ReleaseMode.loop);
+      // Coloque o caminho do áudio da música de fundo na pasta assets/audio
+      // Exemplo: assets/audio/background_music.mp3
+      await _musicPlayer.setVolume(0.7);
+      await _musicPlayer.play(AssetSource('audio/background_music.mp3'));
+    } catch (e) {
+      print('Erro ao tocar música de fundo: $e');
+    }
+  }
+
   void _drawNumber() {
-    if (drawnNumbers.length >= 75) return; // max 75 números
+    if (drawnNumbers.length >= 75) {
+      _stopDrawing();
+      return;
+    }
 
     int num;
-    final random = Random();
     do {
-      num = random.nextInt(75) + 1;
+      num = _random.nextInt(75) + 1;
     } while (drawnNumbers.contains(num));
 
     setState(() {
@@ -116,42 +214,157 @@ class _BingoControlScreenState extends State<BingoControlScreen> {
     });
 
     _broadcast(jsonEncode({"type": "DRAW", "number": num}));
+
+    _playNumberSound();
+  }
+
+  void _startDrawing() {
+    if (_isRunning) return;
+
+    setState(() {
+      _isRunning = true;
+      drawnNumbers.clear();
+    });
+
+    _timer = Timer.periodic(const Duration(seconds: 5), (timer) {
+      if (drawnNumbers.length >= 75) {
+        _stopDrawing();
+        return;
+      }
+      _drawNumber();
+    });
+  }
+
+  void _stopDrawing() {
+    _timer?.cancel();
+    _timer = null;
+    setState(() {
+      _isRunning = false;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
+    final connectedClientsCount =
+        clients.where((c) => c.readyState == WebSocket.open).length;
+
+    if (_serverError != null) {
+      return Scaffold(
+        body: Center(
+          child: Text(
+            _serverError!,
+            style: const TextStyle(color: Colors.red, fontSize: 20, fontWeight: FontWeight.bold),
+            textAlign: TextAlign.center,
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Controle do Bingo (TV)')),
-      body: Column(
+      appBar: AppBar(title: const Text(
+        'Bingo Family',
+        style: TextStyle(
+          fontSize: 32,
+          color: Colors.red,
+          fontWeight: FontWeight.bold,
+        ),
+      )),
+      body: Row(
         children: [
-          ElevatedButton(
-            onPressed: _drawNumber,
-            child: const Text('Sortear número'),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            'IP da TV: $ipAddress',
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-          ),
-          if (ipAddress.isNotEmpty && !ipAddress.startsWith('Erro'))
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: QrImageView(
-                data: ipAddress,
-                version: QrVersions.auto,
-                size: 200.0,
+          // Container esquerdo
+          Expanded(
+            flex: 1,
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const SizedBox(height: 24),
+                  Text(
+                    'IP da TV: $ipAddress',
+                    style: const TextStyle(fontSize: 16),
+                  ),
+                  const SizedBox(height: 12),
+                  if (ipAddress.isNotEmpty && !ipAddress.startsWith('Erro'))
+                    QrImageView(
+                      data: ipAddress,
+                      version: QrVersions.auto,
+                      size: 180.0,
+                      backgroundColor: Colors.white,
+                    ),
+                  const SizedBox(height: 24),
+                  Text(
+                    'Dispositivos conectados: $connectedClientsCount',
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: ListView.builder(
+                      itemCount: clients.length,
+                      itemBuilder: (context, index) {
+                        final client = clients[index];
+                        return Text(
+                          client.readyState == WebSocket.open
+                              ? 'Cliente ${index + 1} conectado'
+                              : 'Cliente ${index + 1} desconectado',
+                          style: const TextStyle(fontSize: 14),
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  ElevatedButton(
+                    onPressed: _isRunning ? null : _startDrawing,
+                    child: const Text('Iniciar sorteio automático'),
+                  ),
+                  const SizedBox(height: 12),
+                  ElevatedButton(
+                    onPressed: _isRunning ? _stopDrawing : null,
+                    child: const Text('Parar sorteio'),
+                  ),
+                ],
               ),
             ),
+          ),
+
+          // Container direito
           Expanded(
-            child: Wrap(
-              children: drawnNumbers
-                  .map((n) => Padding(
-                        padding: const EdgeInsets.all(4.0),
-                        child: Chip(label: Text('$n')),
-                      ))
-                  .toList(),
+            flex: 2,
+            child: Container(
+              margin: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.grey[900],
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.white, width: 2),
+              ),
+              child: SingleChildScrollView(
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: drawnNumbers
+                      .map((n) => Container(
+                            width: 60,
+                            height: 60,
+                            alignment: Alignment.center,
+                            decoration: const BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: Colors.white,
+                            ),
+                            child: Text(
+                              '$n',
+                              style: const TextStyle(
+                                fontSize: 24,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.black,
+                              ),
+                            ),
+                          ))
+                      .toList(),
+                ),
+              ),
             ),
-          )
+          ),
         ],
       ),
     );
