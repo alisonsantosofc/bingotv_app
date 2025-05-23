@@ -253,7 +253,7 @@ class _BingoControlScreenState extends State<BingoControlScreen> {
         body: Center(
           child: Text(
             _serverError!,
-            style: const TextStyle(color: Colors.red, fontSize: 20, fontWeight: FontWeight.bold),
+            style: const TextStyle(fontFamily: 'Poppins', color: Colors.red, fontSize: 20, fontWeight: FontWeight.bold),
             textAlign: TextAlign.center,
           ),
         ),
@@ -264,8 +264,9 @@ class _BingoControlScreenState extends State<BingoControlScreen> {
       appBar: AppBar(title: const Text(
         'Bingo Family',
         style: TextStyle(
+          fontFamily: 'Poppins',
           fontSize: 32,
-          color: Colors.red,
+          color: Colors.teal,
           fontWeight: FontWeight.bold,
         ),
       )),
@@ -282,7 +283,7 @@ class _BingoControlScreenState extends State<BingoControlScreen> {
                   const SizedBox(height: 24),
                   Text(
                     'IP da TV: $ipAddress',
-                    style: const TextStyle(fontSize: 16),
+                    style: const TextStyle(fontFamily: 'Poppins', fontSize: 16),
                   ),
                   const SizedBox(height: 12),
                   if (ipAddress.isNotEmpty && !ipAddress.startsWith('Erro'))
@@ -295,7 +296,7 @@ class _BingoControlScreenState extends State<BingoControlScreen> {
                   const SizedBox(height: 24),
                   Text(
                     'Dispositivos conectados: $connectedClientsCount',
-                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    style: const TextStyle(fontFamily: 'Poppins', fontSize: 16, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 8),
                   Expanded(
@@ -307,7 +308,7 @@ class _BingoControlScreenState extends State<BingoControlScreen> {
                           client.readyState == WebSocket.open
                               ? 'Cliente ${index + 1} conectado'
                               : 'Cliente ${index + 1} desconectado',
-                          style: const TextStyle(fontSize: 14),
+                          style: const TextStyle(fontFamily: 'Poppins', fontSize: 14),
                         );
                       },
                     ),
@@ -342,25 +343,28 @@ class _BingoControlScreenState extends State<BingoControlScreen> {
                 child: Wrap(
                   spacing: 8,
                   runSpacing: 8,
-                  children: drawnNumbers
-                      .map((n) => Container(
-                            width: 60,
-                            height: 60,
-                            alignment: Alignment.center,
-                            decoration: const BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: Colors.white,
-                            ),
-                            child: Text(
-                              '$n',
-                              style: const TextStyle(
-                                fontSize: 24,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.black,
-                              ),
-                            ),
-                          ))
-                      .toList(),
+                  children: (drawnNumbers.length <= 8
+                    ? drawnNumbers
+                    : drawnNumbers.sublist(drawnNumbers.length - 8))
+                  .map((n) => Container(
+                    width: 60,
+                    height: 60,
+                    alignment: Alignment.center,
+                    decoration: const BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.white,
+                    ),
+                    child: Text(
+                      '$n',
+                      style: const TextStyle(
+                        fontFamily: 'Poppins',
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black,
+                      ),
+                    ),
+                  ))
+                  .toList(),
                 ),
               ),
             ),
