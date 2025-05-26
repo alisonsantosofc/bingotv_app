@@ -5,9 +5,10 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
-import 'package:audioplayers/audioplayers.dart';  // Para áudio
+import 'package:audioplayers/audioplayers.dart'; // Para áudio
 
 final clients = <WebSocket>[];
+final Map<WebSocket, String> clientNames = {};
 
 void main() {
   runApp(const TVBingoApp());
@@ -38,7 +39,7 @@ class BingoControlScreen extends StatefulWidget {
 }
 
 class _BingoControlScreenState extends State<BingoControlScreen> {
-  final drawnNumbers = <int>[];
+  var drawnNumbers = <int>[];
   String ipAddress = '';
   String? _serverError;
   Timer? _timer;
@@ -47,6 +48,8 @@ class _BingoControlScreenState extends State<BingoControlScreen> {
 
   final AudioPlayer _audioPlayer = AudioPlayer();
   final AudioPlayer _musicPlayer = AudioPlayer();
+
+  int? lastBall;
 
   @override
   void initState() {
@@ -100,19 +103,30 @@ class _BingoControlScreenState extends State<BingoControlScreen> {
       await for (HttpRequest req in server) {
         if (WebSocketTransformer.isUpgradeRequest(req)) {
           WebSocket socket = await WebSocketTransformer.upgrade(req);
-          clients.add(socket);
           print('Novo cliente conectado: ${req.connectionInfo?.remoteAddress}');
-          setState(() {}); // Atualiza contagem dispositivos
 
           socket.listen(
             (data) {
-              print('Recebido do cliente: $data');
-              _handleClientMessage(data, socket);
+              try {
+                final decoded = jsonDecode(data);
+                final type = decoded['type'];
+
+                if (type == 'PLAYER_JOIN') {
+                  final name = decoded['name'] ?? 'Jogador desconhecido';
+                  clientNames[socket] = name;
+                  clients.add(socket);
+                  setState(() {}); // Atualiza a interface com o novo nome
+                } else {
+                  _handleClientMessage(data, socket);
+                }
+              } catch (e) {
+                print('Erro ao decodificar mensagem inicial: $e');
+              }
             },
             onDone: () {
               clients.remove(socket);
-              print('Cliente desconectado');
-              setState(() {}); // Atualiza contagem dispositivos
+              clientNames.remove(socket);
+              setState(() {});
             },
           );
         } else {
@@ -179,7 +193,6 @@ class _BingoControlScreenState extends State<BingoControlScreen> {
 
   Future<void> _playNumberSound() async {
     try {
-      // Coloque o caminho do áudio de 3 segundos na pasta assets/audio
       await _audioPlayer.play(AssetSource('audio/ball_sound.mp3'));
     } catch (e) {
       print('Erro ao tocar som: $e');
@@ -189,9 +202,7 @@ class _BingoControlScreenState extends State<BingoControlScreen> {
   Future<void> _startBackgroundMusic() async {
     try {
       await _musicPlayer.setReleaseMode(ReleaseMode.loop);
-      // Coloque o caminho do áudio da música de fundo na pasta assets/audio
-      // Exemplo: assets/audio/background_music.mp3
-      await _musicPlayer.setVolume(0.7);
+      await _musicPlayer.setVolume(0.4);
       await _musicPlayer.play(AssetSource('audio/background_music.mp3'));
     } catch (e) {
       print('Erro ao tocar música de fundo: $e');
@@ -210,11 +221,17 @@ class _BingoControlScreenState extends State<BingoControlScreen> {
     } while (drawnNumbers.contains(num));
 
     setState(() {
-      drawnNumbers.add(num);
+      if (lastBall != null) {
+        drawnNumbers.insert(
+            0, lastBall!); // move a bola anterior para o histórico
+        if (drawnNumbers.length > 5) {
+          drawnNumbers = drawnNumbers.sublist(0, 5); // mantém 5 bolas no máximo
+        }
+      }
+      lastBall = num; // define a nova última bola
     });
 
     _broadcast(jsonEncode({"type": "DRAW", "number": num}));
-
     _playNumberSound();
   }
 
@@ -253,15 +270,22 @@ class _BingoControlScreenState extends State<BingoControlScreen> {
         body: Center(
           child: Text(
             _serverError!,
-            style: const TextStyle(fontFamily: 'Poppins', color: Colors.red, fontSize: 20, fontWeight: FontWeight.bold),
+            style: const TextStyle(
+                fontFamily: 'Poppins',
+                color: Colors.red,
+                fontSize: 20,
+                fontWeight: FontWeight.bold),
             textAlign: TextAlign.center,
           ),
         ),
       );
     }
 
+    final String lastBallText = lastBall != null ? '$lastBall' : '';
+
     return Scaffold(
-      appBar: AppBar(title: const Text(
+      appBar: AppBar(
+          title: const Text(
         'Bingo Family',
         style: TextStyle(
           fontFamily: 'Poppins',
@@ -290,13 +314,16 @@ class _BingoControlScreenState extends State<BingoControlScreen> {
                     QrImageView(
                       data: ipAddress,
                       version: QrVersions.auto,
-                      size: 180.0,
+                      size: 120.0,
                       backgroundColor: Colors.white,
                     ),
                   const SizedBox(height: 24),
                   Text(
                     'Dispositivos conectados: $connectedClientsCount',
-                    style: const TextStyle(fontFamily: 'Poppins', fontSize: 16, fontWeight: FontWeight.bold),
+                    style: const TextStyle(
+                        fontFamily: 'Poppins',
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 8),
                   Expanded(
@@ -304,11 +331,16 @@ class _BingoControlScreenState extends State<BingoControlScreen> {
                       itemCount: clients.length,
                       itemBuilder: (context, index) {
                         final client = clients[index];
+                        final name =
+                            clientNames[client] ?? 'Cliente ${index + 1}';
+                        final status = client.readyState == WebSocket.open
+                            ? 'conectado'
+                            : 'desconectado';
+
                         return Text(
-                          client.readyState == WebSocket.open
-                              ? 'Cliente ${index + 1} conectado'
-                              : 'Cliente ${index + 1} desconectado',
-                          style: const TextStyle(fontFamily: 'Poppins', fontSize: 14),
+                          '$name: $status',
+                          style: const TextStyle(
+                              fontFamily: 'Poppins', fontSize: 14),
                         );
                       },
                     ),
@@ -316,14 +348,71 @@ class _BingoControlScreenState extends State<BingoControlScreen> {
                   const SizedBox(height: 24),
                   ElevatedButton(
                     onPressed: _isRunning ? null : _startDrawing,
-                    child: const Text('Iniciar sorteio automático'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.teal,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 24, vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    child: const Text(
+                      'Iniciar bingo',
+                      style: TextStyle(
+                        fontFamily: 'Poppins',
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white,
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 12),
                   ElevatedButton(
-                    onPressed: _isRunning ? _stopDrawing : null,
-                    child: const Text('Parar sorteio'),
-                  ),
+                      onPressed: _isRunning ? _stopDrawing : null,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.teal,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 24, vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                      child: const Text(
+                        'Parar',
+                        style: TextStyle(
+                          fontFamily: 'Poppins',
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white,
+                        ),
+                      )),
                 ],
+              ),
+            ),
+          ),
+
+          Padding(
+            padding: const EdgeInsets.only(bottom: 24),
+            child: Container(
+              width: 140,
+              height: 140,
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                      color: Colors.black26, blurRadius: 12, spreadRadius: 3),
+                ],
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                lastBallText,
+                style: const TextStyle(
+                  fontFamily: 'Poppins',
+                  fontSize: 56,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black,
+                ),
               ),
             ),
           ),
@@ -332,6 +421,9 @@ class _BingoControlScreenState extends State<BingoControlScreen> {
           Expanded(
             flex: 2,
             child: Container(
+              height: 68, // altura fixa como você pediu
+              width: double.infinity,
+              alignment: Alignment.center,
               margin: const EdgeInsets.all(16),
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
@@ -339,33 +431,39 @@ class _BingoControlScreenState extends State<BingoControlScreen> {
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: Colors.white, width: 2),
               ),
-              child: SingleChildScrollView(
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: (drawnNumbers.length <= 8
-                    ? drawnNumbers
-                    : drawnNumbers.sublist(drawnNumbers.length - 8))
-                  .map((n) => Container(
-                    width: 60,
-                    height: 60,
-                    alignment: Alignment.center,
-                    decoration: const BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.white,
-                    ),
-                    child: Text(
-                      '$n',
-                      style: const TextStyle(
-                        fontFamily: 'Poppins',
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: drawnNumbers.reversed
+                    .take(7)
+                    .map(
+                      (num) => Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: Container(
+                          width: 60,
+                          height: 60,
+                          decoration: const BoxDecoration(
+                            color: Colors.white,
+                            shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black26,
+                                blurRadius: 4,
+                                spreadRadius: 1,
+                              ),
+                            ],
+                          ),
+                          alignment: Alignment.center,
+                          child: Text(
+                            '$num',
+                            style: const TextStyle(
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
                       ),
-                    ),
-                  ))
-                  .toList(),
-                ),
+                    )
+                    .toList(),
               ),
             ),
           ),
