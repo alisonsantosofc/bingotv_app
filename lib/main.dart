@@ -147,25 +147,39 @@ class _BingoControlScreenState extends State<BingoControlScreen> {
       final decoded = jsonDecode(data);
       final type = decoded['type'];
 
-      if (type == 'BINGO') {
+      if (type == 'BINGO_REQUEST') {
         List<dynamic> clientNumbers = decoded['numbers'] ?? [];
-        final playerId = decoded['playerId'] ?? 'Jogador desconhecido';
+        final playerName = decoded['playerName'] ?? 'Jogador desconhecido';
 
         final isWinner = _checkBingo(clientNumbers.cast<int>());
         if (isWinner) {
           _broadcast(jsonEncode({
             'type': 'BINGO_RESULT',
             'result': 'WIN',
-            'playerId': playerId,
-            'message': 'Bingo válido! Jogo encerrado.'
+            'playerName': playerName,
+            'message': 'Parabéns $playerName você ganhou!'
           }));
 
           _stopDrawing();
+          
+          showDialog(
+            context: context,
+            builder: (_) => AlertDialog(
+              title: const Text('Resultado'),
+              content: Text('BINGO! $playerName ganhou!'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('OK'),
+                )
+              ],
+            ),
+          );
         } else {
           socket.add(jsonEncode({
             'type': 'BINGO_RESULT',
             'result': 'FAIL',
-            'message': 'Bingo inválido. Continue jogando!'
+            'message': '$playerName passou batido. O bingo vai continuar!'
           }));
         }
       }
@@ -191,9 +205,10 @@ class _BingoControlScreenState extends State<BingoControlScreen> {
     }
   }
 
-  Future<void> _playNumberSound() async {
+  Future<void> _playNumberSound(int num) async {
     try {
       await _audioPlayer.play(AssetSource('audio/ball_sound.mp3'));
+      await _audioPlayer.play(AssetSource('audio/balls/$num.mp3'));
     } catch (e) {
       print('Erro ao tocar som: $e');
     }
@@ -202,7 +217,7 @@ class _BingoControlScreenState extends State<BingoControlScreen> {
   Future<void> _startBackgroundMusic() async {
     try {
       await _musicPlayer.setReleaseMode(ReleaseMode.loop);
-      await _musicPlayer.setVolume(0.4);
+      await _musicPlayer.setVolume(0.2);
       await _musicPlayer.play(AssetSource('audio/background_music.mp3'));
     } catch (e) {
       print('Erro ao tocar música de fundo: $e');
@@ -232,7 +247,7 @@ class _BingoControlScreenState extends State<BingoControlScreen> {
     });
 
     _broadcast(jsonEncode({"type": "DRAW", "number": num}));
-    _playNumberSound();
+    _playNumberSound(num);
   }
 
   void _startDrawing() {
@@ -421,7 +436,7 @@ class _BingoControlScreenState extends State<BingoControlScreen> {
           Expanded(
             flex: 2,
             child: Container(
-              height: 68, // altura fixa como você pediu
+              height: 68,
               width: double.infinity,
               alignment: Alignment.center,
               margin: const EdgeInsets.all(16),
